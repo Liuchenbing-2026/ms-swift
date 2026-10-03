@@ -18,6 +18,8 @@ case "$stage" in
   probe|probe-cpu|probe-pageable) extra=(--max_steps 2 --save_strategy no --eval_strategy no) ;;
   tiny-sharded) plugins+=(/workspace/checkpoint_space.py); model=/workspace/tiny-model; data=/workspace/decision_data/tiny.jsonl; fsdp_config=/workspace/fsdp2-sharded.json; extra=(--max_steps 2 --save_steps 2 --eval_strategy no) ;;
   tiny-sharded-resume) plugins+=(/workspace/checkpoint_space.py); model=/workspace/tiny-model; data=/workspace/decision_data/tiny.jsonl; fsdp_config=/workspace/fsdp2-sharded.json; extra=(--max_steps 3 --save_steps 3 --eval_strategy no --resume_from_checkpoint /workspace/outputs/tiny-sharded/checkpoint-2) ;;
+  tiny-sync) plugins+=(/workspace/checkpoint_space.py); model=/workspace/tiny-model; data=/workspace/decision_data/tiny.jsonl; fsdp_config=/workspace/fsdp2-sharded.json; extra=(--max_steps 2 --save_steps 2 --eval_strategy no) ;;
+  tiny-sync-resume) plugins+=(/workspace/checkpoint_space.py); model=/workspace/tiny-model; data=/workspace/decision_data/tiny.jsonl; fsdp_config=/workspace/fsdp2-sharded.json; extra=(--max_steps 3 --save_steps 3 --eval_strategy no --resume_from_checkpoint /workspace/outputs/tiny-sync/checkpoint-2) ;;
   tiny-control) plugins=(/workspace/decision_plugin.py /workspace/checkpoint_fence.py /workspace/cpu_offload.py /workspace/checkpoint_space.py); model=/workspace/tiny-model; data=/workspace/decision_data/tiny.jsonl; fsdp_config=/workspace/fsdp2-sharded.json; extra=(--max_steps 2 --save_steps 2 --eval_strategy no) ;;
   tiny-lazy) plugins+=(/workspace/checkpoint_space.py); model=/workspace/tiny-model; data=/workspace/decision_data/tiny.jsonl; fsdp_config=/workspace/fsdp2-sharded.json; extra=(--max_steps 2 --save_steps 2 --eval_strategy no) ;;
   tiny-lazy-resume) plugins+=(/workspace/checkpoint_space.py); model=/workspace/tiny-model; data=/workspace/decision_data/tiny.jsonl; fsdp_config=/workspace/fsdp2-sharded.json; extra=(--max_steps 3 --save_steps 3 --eval_strategy no --resume_from_checkpoint /workspace/outputs/tiny-lazy/checkpoint-2) ;;
@@ -36,7 +38,7 @@ swift sft \
   --enable_thinking false --max_length 8192 --truncation_strategy delete \
   --packing false --padding_free false --attn_impl sdpa \
   --torch_dtype float32 --bf16 true --fp16 false --fsdp "$fsdp_config" \
-  --gradient_checkpointing false --use_logits_to_keep true \
+  --gradient_checkpointing false --use_logits_to_keep true --accelerator_config /workspace/accelerator.json \
   --per_device_train_batch_size 1 --gradient_accumulation_steps 4 \
   --per_device_eval_batch_size 1 --learning_rate 2e-6 \
   --weight_decay 0.01 --warmup_ratio 0.03 --lr_scheduler_type cosine \
