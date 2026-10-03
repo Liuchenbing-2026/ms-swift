@@ -7,31 +7,32 @@ export OMP_NUM_THREADS=16 TOKENIZERS_PARALLELISM=false HF_HUB_OFFLINE=1 HF_DATAS
 export PYTHONPATH=/workspace:${PYTHONPATH:-}
 export HCCL_CONNECT_TIMEOUT=300 HCCL_EXEC_TIMEOUT=1800
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True DECISION_PAD_MULTIPLE=128
-stage=${1:-probe-cpu}
+stage=${1:-tiny}
 model=/models/Qwen3.6-35B-A3B
 data=/workspace/decision_data/train.jsonl
 fsdp_config=/workspace/fsdp2.json
+plugins=(/workspace/decision_plugin.py /workspace/checkpoint_fence.py /workspace/cpu_offload.py)
 case "$stage" in
   tiny) model=/workspace/tiny-model; data=/workspace/decision_data/tiny.jsonl; extra=(--max_steps 2 --save_steps 1 --eval_strategy no) ;;
   tiny-resume) model=/workspace/tiny-model; data=/workspace/decision_data/tiny.jsonl; extra=(--max_steps 3 --save_steps 1 --eval_strategy no --resume_from_checkpoint /workspace/outputs/tiny/checkpoint-2) ;;
-  probe|probe-cpu) extra=(--max_steps 2 --save_strategy no --eval_strategy no) ;;
-  tiny-sharded) model=/workspace/tiny-model; data=/workspace/decision_data/tiny.jsonl; fsdp_config=/workspace/fsdp2-sharded.json; extra=(--max_steps 2 --save_steps 2 --eval_strategy no) ;;
-  tiny-sharded-resume) model=/workspace/tiny-model; data=/workspace/decision_data/tiny.jsonl; fsdp_config=/workspace/fsdp2-sharded.json; extra=(--max_steps 3 --save_steps 3 --eval_strategy no --resume_from_checkpoint /workspace/outputs/tiny-sharded/checkpoint-2) ;;
+  probe|probe-cpu|probe-pageable) extra=(--max_steps 2 --save_strategy no --eval_strategy no) ;;
+  tiny-sharded) plugins+=(/workspace/checkpoint_space.py); model=/workspace/tiny-model; data=/workspace/decision_data/tiny.jsonl; fsdp_config=/workspace/fsdp2-sharded.json; extra=(--max_steps 2 --save_steps 2 --eval_strategy no) ;;
+  tiny-sharded-resume) plugins+=(/workspace/checkpoint_space.py); model=/workspace/tiny-model; data=/workspace/decision_data/tiny.jsonl; fsdp_config=/workspace/fsdp2-sharded.json; extra=(--max_steps 3 --save_steps 3 --eval_strategy no --resume_from_checkpoint /workspace/outputs/tiny-sharded/checkpoint-2) ;;
   smoke) extra=(--max_steps 2 --save_steps 2 --eval_strategy no) ;;
   resume) extra=(--max_steps 3 --save_steps 3 --eval_strategy no --resume_from_checkpoint /workspace/outputs/smoke/checkpoint-2) ;;
-  train) extra=(--num_train_epochs 2 --save_steps 150 --eval_strategy steps --eval_steps 150 --load_best_model_at_end true --metric_for_best_model loss --greater_is_better false) ;;
+  train) plugins+=(/workspace/checkpoint_space.py); fsdp_config=/workspace/fsdp2-sharded.json; extra=(--num_train_epochs 2 --save_steps 150 --eval_strategy steps --eval_steps 150 --load_best_model_at_end false) ;;
   *) exit 2 ;;
 esac
 swift sft \
   --model "$model" --model_type qwen3_5_moe \
-  --external_plugins /workspace/decision_plugin.py /workspace/checkpoint_fence.py \
+  --external_plugins "${plugins[@]}" \
   --template intern_decision_training --new_special_tokens '<decision>' \
   --tuner_type full --freeze_vit true --freeze_aligner true --freeze_llm false \
   --dataset "$data" --val_dataset /workspace/decision_data/validation.jsonl \
   --remove_unused_columns false --strict true --split_dataset_ratio 0 \
   --enable_thinking false --max_length 8192 --truncation_strategy delete \
   --packing false --padding_free false --attn_impl sdpa \
-  --torch_dtype bfloat16 --bf16 true --fsdp "$fsdp_config" \
+  --torch_dtype float32 --bf16 true --fp16 false --fsdp "$fsdp_config" \
   --gradient_checkpointing false --use_logits_to_keep true \
   --per_device_train_batch_size 1 --gradient_accumulation_steps 4 \
   --per_device_eval_batch_size 1 --learning_rate 2e-6 \
