@@ -13,6 +13,20 @@ import time
 from relocate_checkpoint_files import persist, relocate
 
 
+def latest_training_update(plan):
+    if not plan.get("training_log"):
+        return json.loads(Path(plan["progress"]).read_text())["latest_training_update"]
+    # Read the live continuation log rather than a terminated supervisor's snapshot.
+    for line in reversed(Path(plan["training_log"]).read_text().splitlines()):
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue  # The writer may still be appending the last record.
+        if all(key in row for key in ("global_step/max_steps", "loss", "grad_norm")):
+            return row
+    raise ValueError("No complete training update in the continuation log")
+
+
 def complete_checkpoint(path, step):
     path = Path(path)
     if json.loads((path / "trainer_state.json").read_text())["global_step"] != step:
@@ -94,9 +108,8 @@ def main():
         for step in plan["steps"]:
             checkpoint = training / f"checkpoint-{step}"
             while time.monotonic() < deadline:
-                progress = json.loads(Path(plan["progress"]).read_text())
                 tuning = json.loads(Path(plan["tuning_state"]).read_text())
-                latest = progress["latest_training_update"]
+                latest = latest_training_update(plan)
                 logged = int(latest["global_step/max_steps"].split("/")[0])
                 phase = tuning["status"]
                 state.update(status="waiting", target_step=step, logged_step=logged,

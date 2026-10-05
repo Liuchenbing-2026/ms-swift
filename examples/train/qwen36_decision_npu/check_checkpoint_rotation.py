@@ -5,10 +5,19 @@ import tempfile
 import unittest
 
 from relocate_checkpoint_files import relocate
-from rotate_checkpoint_storage import reclaim_orphans
+from rotate_checkpoint_storage import reclaim_orphans, latest_training_update
 
 
 class RotationChecks(unittest.TestCase):
+    def test_live_log_ignores_partial_and_evaluation_rows(self):
+        path = self.root / "logging.jsonl"
+        expected = {"global_step/max_steps": "301/600", "loss": 1.0, "grad_norm": 2.0}
+        path.write_text(json.dumps(expected) + '\n{"eval_loss":1}\n{"partial":')
+        self.assertEqual(latest_training_update({"training_log": str(path)}), expected)
+        path.write_text('{"eval_loss":1}\n')
+        with self.assertRaises(ValueError):
+            latest_training_update({"training_log": str(path)})
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name).resolve()

@@ -135,3 +135,14 @@ relocation records before retrying; never start a second keeper over the same
 storage. CPU tests exercise retained-checkpoint protection, remaining symlink
 references, unexpected file changes, and idempotent orphan reclamation. They
 do not substitute for a complete real-model rotation cycle.
+
+## Following a recovered training controller
+
+A stopped supervisor's progress JSON may remain frozen at its last step. Set `training_log` in the private rotation plan to the live continuation `logging.jsonl`; complete loss/gradient update records then drive eligibility, and partial trailing JSON and evaluation-only records are ignored. Keep `tuning_state` pointed to the active controller's state. After verifying the prior keeper is only waiting and has not relocated or reclaimed any shard, stop that exact keeper and start one with a fresh output directory. Retain the existing relocation manifest, original recovery checkpoint, reserve space and file list. Never overlap two keepers.
+
+```bash
+python check_checkpoint_rotation.py
+python rotate_checkpoint_storage.py --plan "$PRIVATE_ROTATION_PLAN"
+```
+
+Five CPU tests pass, including incomplete log handling and checkpoint/reference retention. This is supervision repair, not measured training acceleration.
