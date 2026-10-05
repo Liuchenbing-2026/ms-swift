@@ -5,6 +5,7 @@ No process is stopped until the requested checkpoint is complete and stable.
 Trial outputs are separate; a failed candidate never replaces the checkpoint.
 """
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -113,6 +114,41 @@ def admissible(base, trial):
     return True, "finite, matching samples, bounded numerical differences"
 
 
+def reuse_trial(spec, start, checkpoint_inventory):
+    """Require immutable provenance and a complete, stopped four-rank probe."""
+    folder = Path(spec["host_output"])
+    if output_processes(spec["container_output"]):
+        raise RuntimeError("Cannot reuse an active trial")
+    source = json.loads(Path(spec["controller_state"]).read_text())
+    normalized = json.loads(json.dumps(checkpoint_inventory))
+    if source["checkpoint_inventory"] != normalized:
+        raise ValueError("Cached trial used a different checkpoint inventory")
+    result = summarize(folder, start)
+    files = [folder / f"throughput-rank{rank}.jsonl" for rank in range(4)]
+    files += [folder / "logging.jsonl"]
+    records = [json.loads(line) for line in files[-1].read_text().splitlines()]
+    finals = [r for r in records if "train_runtime" in r]
+    if len(finals) != 1 or finals[0]["global_step/max_steps"].split("/")[0] != str(start + 4):
+        raise ValueError("Cached trial lacks its final runtime record")
+    result["reused_evidence"] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
+    result["completion_evidence"] = "all rank updates and final runtime record; no active output processes"
+    return result
+
+
+def wait_for_handoff(plan, persist):
+    handoff = plan.get("handoff")
+    if not handoff:
+        return
+    if identity(handoff["controller_pid"]) == handoff["controller_identity"]:
+        raise RuntimeError("Prior controller is still alive")
+    persist(status="waiting_for_adopted_trial")
+    deadline = time.monotonic() + handoff.get("timeout_seconds", 7200)
+    while output_processes(handoff["container_output"]) or identity(handoff["child_pid"]) == handoff["child_identity"]:
+        if time.monotonic() > deadline:
+            raise TimeoutError("Adopted probe did not exit; no new job launched")
+        time.sleep(10)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--plan", required=True)
@@ -130,7 +166,7 @@ def main():
         temporary.write_text(json.dumps(status, indent=2))
         temporary.replace(root / "state.json")
 
-    def run(batch, name, probe=True, evaluation=False, initial=False):
+    def run(batch, name, probe=True, evaluation=False, initial=False, fsdp_config=None):
         env = dict(plan["environment"])
         env.update(MICROBATCH=str(batch), RESUME_FROM=plan["container_checkpoint"],
                    OUTPUT_DIR=plan["container_output"] + "/" + name if probe else plan["continuation_output"],
@@ -139,6 +175,8 @@ def main():
                    SAVE_STRATEGY="no" if probe else "steps",
                    EVAL_STRATEGY="no" if probe else "steps",
                    DECISION_EVAL_ONLY="1" if evaluation else "0")
+        if fsdp_config:
+            env["FSDP_CONFIG"] = fsdp_config
         if evaluation:
             env["DECISION_EVAL_CONFIG"] = plan["evaluation_config"]
         if initial:
@@ -181,6 +219,7 @@ def main():
     checkpoint = plan["host_checkpoint"]
     original_stopped = False
     try:
+        wait_for_handoff(plan, persist)
         deadline = time.monotonic() + plan.get("wait_seconds", 86400)
         while time.monotonic() < deadline:
             if plan.get("resume_saved_checkpoint"):
@@ -235,12 +274,20 @@ def main():
                 "accuracy_delta": after[name]["accuracy"] - before[name]["accuracy"]}
                 for name in before}
             persist()
-        baseline = run(1, "baseline")
+        def trial_or_reuse(batch, name):
+            cached = plan.get("reuse_trials", {}).get(name)
+            if cached:
+                result = reuse_trial(cached, plan["checkpoint_step"], status["checkpoint_inventory"])
+                persist(status="reusing_completed_trial", reused_trial=name)
+                return result
+            return run(batch, name)
+
+        baseline = trial_or_reuse(1, "baseline")
         status["trials"]["1"] = baseline
         selected, best = 1, baseline["median_seconds"]
         for batch in (2, 4):
             try:
-                trial = run(batch, "batch" + str(batch))
+                trial = trial_or_reuse(batch, "batch" + str(batch))
                 valid, reason = admissible(baseline, trial)
                 trial.update(admissible=valid, reason=reason)
                 status["trials"][str(batch)] = trial
@@ -249,10 +296,23 @@ def main():
             except Exception as error:
                 status["trials"][str(batch)] = {"error": str(error)}
             persist()
-        persist(selected_microbatch=selected, status="comparison_complete",
+        selected_config = None
+        variant = plan.get("no_recompute_config")
+        if variant:
+            try:
+                trial = run(selected, "no-recompute", fsdp_config=variant)
+                valid, reason = admissible(baseline, trial)
+                trial.update(admissible=valid, reason=reason, microbatch=selected)
+                status["trials"]["no-recompute"] = trial
+                if valid and trial["median_seconds"] < min(best, baseline["median_seconds"] * 0.9):
+                    best, selected_config = trial["median_seconds"], variant
+            except Exception as error:
+                status["trials"]["no-recompute"] = {"error": str(error)}
+            persist()
+        persist(selected_fsdp_config=selected_config or "original", selected_microbatch=selected, status="comparison_complete",
                 limitation="Short-run numerical gates do not replace final accuracy evaluation")
         original_stopped = False  # A continuation error must not trigger a duplicate restart.
-        run(selected, "continuation", probe=False)
+        run(selected, "continuation", probe=False, fsdp_config=selected_config)
         persist(status="training_finished_pending_independent_evaluation")
     except Exception as error:
         persist(status="failed", error=str(error))

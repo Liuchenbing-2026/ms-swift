@@ -11,6 +11,39 @@ from tune_microbatch import admissible, checkpoint_files, summarize
 
 
 class TrialChecks(unittest.TestCase):
+    def test_handoff_does_not_adopt_live_controller(self):
+        with patch.object(tune_microbatch, "identity", return_value="same"):
+            with self.assertRaises(RuntimeError):
+                tune_microbatch.wait_for_handoff({"handoff": {
+                    "controller_pid": 1, "controller_identity": "same"}}, lambda **kw: None)
+
+    def test_reuse_requires_matching_checkpoint_and_stopped_complete_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "state.json"
+            source.write_text(json.dumps({"checkpoint_inventory": {"weight": [5, 10]}}))
+            for rank in range(4):
+                (root / f"throughput-rank{rank}.jsonl").write_text("fixture")
+            log = root / "logging.jsonl"
+            log.write_text(json.dumps({"train_runtime": 10, "global_step/max_steps": "304/600"}))
+            spec = {"host_output": str(root), "container_output": "/probe", "controller_state": str(source)}
+            with patch.object(tune_microbatch, "output_processes", return_value=[]) as active, \
+                    patch.object(tune_microbatch, "summarize", return_value={}):
+                got = tune_microbatch.reuse_trial(spec, 300, {"weight": (5, 10)})
+                self.assertEqual(len(got["reused_evidence"]), 5)
+                with self.assertRaises(ValueError):
+                    tune_microbatch.reuse_trial(spec, 300, {"weight": (6, 10)})
+                active.return_value = [100]
+                with self.assertRaises(RuntimeError):
+                    tune_microbatch.reuse_trial(spec, 300, {"weight": (5, 10)})
+                active.return_value = []
+                log.write_text("{}")
+                with self.assertRaises(ValueError):
+                    tune_microbatch.reuse_trial(spec, 300, {"weight": (5, 10)})
+
+    def test_selected_recompute_configuration_reaches_continuation(self):
+        self.check_owned_run(False, saved=True, recompute=True)
+
     def test_idle_resume_rejects_busy_unknown_and_owned_workers(self):
         plan = {"owned_pids": {"123": "old"}, "previous_outputs": ["/old"],
                 "continuation_output": "/continue", "physical_devices": [0, 1, 2, 3]}
@@ -42,7 +75,7 @@ class TrialChecks(unittest.TestCase):
     def test_evaluation_precedes_trials_without_updates(self):
         self.check_owned_run(True)
 
-    def check_owned_run(self, evaluate, saved=False, fail=False):
+    def check_owned_run(self, evaluate, saved=False, fail=False, recompute=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             checkpoint = root / "checkpoint-300"
@@ -61,6 +94,8 @@ class TrialChecks(unittest.TestCase):
                     "container": "fixture", "container_output": "/trial",
                     "container_checkpoint": "/checkpoint", "continuation_output": "/continue",
                     "container_launcher": "/launcher.sh", "environment": {}}
+            if recompute:
+                plan["no_recompute_config"] = "/no-recompute.json"
             if saved:
                 plan.update(resume_saved_checkpoint=True, previous_outputs=["/old"],
                             physical_devices=[0, 1, 2, 3])
@@ -89,8 +124,8 @@ class TrialChecks(unittest.TestCase):
                     return 1 if fail else 0
 
             def summary(folder, step):
-                batch = {"baseline": 1, "batch2": 2, "batch4": 4}[folder.name]
-                return {"median_seconds": {1: 10, 2: 6, 4: 8}[batch],
+                batch = {"baseline": 1, "batch2": 2, "batch4": 4, "no-recompute": 8}[folder.name]
+                return {"median_seconds": {1: 10, 2: 6, 4: 8, 8: 4}[batch],
                         "samples": [["same"]], "losses": [1], "gradient_norms": [2]}
 
             def stop(pid, sig):
@@ -120,7 +155,10 @@ class TrialChecks(unittest.TestCase):
                 return
             self.assertEqual(result["selected_microbatch"], 2)
             self.assertEqual(result["status"], "training_finished_pending_independent_evaluation")
-            self.assertEqual(len(commands), 6 if evaluate else 4)
+            self.assertEqual(len(commands), (6 if evaluate else 4) + int(recompute))
+            if recompute:
+                self.assertEqual(result["selected_fsdp_config"], "/no-recompute.json")
+                self.assertIn("FSDP_CONFIG=/no-recompute.json", commands[-1])
             if evaluate:
                 self.assertIn("RESUME_FROM=", commands[0])
                 self.assertIn("RESUME_FROM=/checkpoint", commands[1])
