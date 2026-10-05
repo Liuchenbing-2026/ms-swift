@@ -73,6 +73,19 @@ def main():
         name, container = stage['name'], stage['container']
         for path, expected in plan.get('pinned_files', {}).items():
             assert sha256(Path(path)) == expected, 'Pinned evaluation input or source changed: ' + path
+        reuse = plan.get('reuse_completed', {}).get(name)
+        if reuse:
+            previous = json.loads(Path(reuse['state']).read_text())
+            assert previous['checkpoint_sha256'] == state['checkpoint_sha256']
+            prior = previous['stages'][name]
+            assert prior['status'] == 'complete' and prior['returncode'] == 0
+            assert prior['command'] == stage['command'], 'Completed evaluation command changed'
+            assert stage['result'] in reuse['artifacts']
+            for path, expected in reuse['artifacts'].items():
+                assert sha256(Path(path)) == expected, 'Completed evaluation artifact changed'
+            state['stages'][name] = dict(prior, reused_from=reuse['state'], artifacts=reuse['artifacts'])
+            persist()
+            return
         if running(container):
             raise RuntimeError('Container unexpectedly running before acceptance: ' + container)
         # The device must still be free; never terminate unowned processes.
@@ -143,7 +156,7 @@ def main():
         assert shards and all(p.is_file() and p.stat().st_size > 0 for p in shards)
         state['checkpoint_sha256'] = {p.name: sha256(p) for p in sorted(shards)}
         persist()
-        assert [stage['name'] for stage in plan['stages']] == ['business', 'broad49', 'official7']
+        assert sorted(stage['name'] for stage in plan['stages']) == ['broad49', 'business', 'official7']
         for stage in plan['stages']:
             run(stage)
         assert set(state['stages']) == {'business', 'broad49', 'official7'}

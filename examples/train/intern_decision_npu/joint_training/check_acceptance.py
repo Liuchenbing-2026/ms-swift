@@ -11,7 +11,7 @@ import run_acceptance
 
 
 class AcceptanceTests(unittest.TestCase):
-    def execute(self, training_status='validation_complete', busy=False):
+    def execute(self, training_status='validation_complete', busy=False, reuse=False, corrupt=False):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / 'pipeline-state.json').write_text(json.dumps({'status': training_status}))
@@ -28,6 +28,18 @@ class AcceptanceTests(unittest.TestCase):
                 stages.append({'name': name, 'container': 'owned-evaluation', 'command': ['evaluate', name], 'result': str(path)})
             plan = {'host_workspace': str(root), 'training_container': 'owned-training', 'checkpoint_step': 120,
                     'free_device_check': ['free-device'], 'stages': stages}
+            if reuse:
+                old = root / 'prior-state.json'
+                old.write_text(json.dumps({'checkpoint_sha256': {'model.safetensors':
+                    run_acceptance.sha256(checkpoint / 'model.safetensors')},
+                    'stages': {'business': {'status': 'complete', 'returncode': 0,
+                                           'command': stages[0]['command']}}}))
+                result = root / 'business.json'
+                plan['reuse_completed'] = {'business': {'state': str(old),
+                    'artifacts': {str(result): run_acceptance.sha256(result)}}}
+                plan['stages'] = [stages[0], stages[2], stages[1]]
+                if corrupt:
+                    result.write_text('{}')
             path = root / 'plan.json';path.write_text(json.dumps(plan))
             calls = []
             def run(command, **kwargs):
@@ -38,8 +50,8 @@ class AcceptanceTests(unittest.TestCase):
                  patch.object(run_acceptance.subprocess, 'check_output', return_value='false\n'), \
                  patch.object(run_acceptance.subprocess, 'run', side_effect=run), \
                  patch.object(run_acceptance.subprocess, 'Popen', return_value=process) as popen:
-                if busy or training_status == 'failed':
-                    with self.assertRaises(RuntimeError):
+                if busy or training_status == 'failed' or corrupt:
+                    with self.assertRaises((RuntimeError, AssertionError)):
                         run_acceptance.main()
                 else:
                     run_acceptance.main()
@@ -83,6 +95,17 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(launched, 3)
         self.assertEqual(len(state['checkpoint_sha256']), 1)
         self.assertFalse(state['test_used_for_selection'])
+
+    def test_completed_stage_is_reused_without_rerunning(self):
+        state, calls, launched = self.execute(reuse=True)
+        self.assertEqual(state['status'], 'complete')
+        self.assertEqual(launched, 2)
+        self.assertIn('reused_from', state['stages']['business'])
+
+    def test_changed_completed_artifact_stops_resume(self):
+        state, calls, launched = self.execute(reuse=True, corrupt=True)
+        self.assertEqual(state['status'], 'failed')
+        self.assertEqual(launched, 0)
 
     def test_failed_training_does_not_start_evaluation(self):
         state, calls, launched = self.execute('failed')

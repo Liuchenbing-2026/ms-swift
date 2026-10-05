@@ -139,3 +139,18 @@ python run_acceptance.py --plan "$PRIVATE_ACCEPTANCE_PLAN"
 The diagnostic checks every saved tensor against the loaded model, binds all checkpoint files by SHA256, repeats canonical validation, and compares explicit whole-model cast and autocast paths. Results are private artifacts. In a recovery plan, set `export_runtime_audit` to this completed audit directory and use a fresh `output_directory`. The acceptance gate requires exact canonical prediction/probability repeatability, exact reproduction of the prior in-memory output by the buffer cast, unchanged checkpoint hashes, and only nonpersistent FP32-to-BF16 inverse-frequency buffer changes. It retains the original pipeline failure and explicitly records canonical reload as the assessment runtime. This path rejects other pipeline errors; it does not weaken the original zero-change check or rerun training.
 
 Keep the predeclared checkpoint step, three test suites and all pinned evaluator/data hashes unchanged. Stop the owned diagnostic container after its process exits, then let the acceptance driver acquire the reserved free device. No test score selects a model or training setting. Four CPU acceptance tests cover the ordinary path, failure/device isolation and recovery rejection after weight or prediction changes. New export-helper validation is separate from the previously completed training run.
+
+## Recovering a partially completed evaluation
+
+The broad-suite smoke check compares single inference with the requested batch size. Previously it always evaluated the smoke cases together, even when batch size one was requested. The local broad-suite entry now honors the requested batch and saves both predictions/probabilities. It retains the zero-argmax-change and probability-difference thresholds. If a checkpoint fails the batched numerical gate, run the explicitly declared single-request reference (`--batch-size 1`) in a fresh output directory and keep the failed batch evidence. This does not establish equivalence to older batched reports; report the execution protocol with the scores. It changes neither weights nor test data.
+
+```bash
+python evaluate_laya_suite.py --checkpoint "$FIXED_CHECKPOINT" \
+  --dataset "$LAYA_SUITE_JSON" --typed-data "$TYPED_TEST_JSONL" \
+  --typed-result "$COMPLETED_BUSINESS_RESULT" --batch-size 1 \
+  --output "$NEW_BROAD_OUTPUT"
+python check_acceptance.py
+python run_acceptance.py --plan "$PRIVATE_RESUME_PLAN"
+```
+
+The acceptance plan may reorder the same three suites and reuse a completed stage using `reuse_completed`, which maps the stage name to its previous `state` and an `artifacts` map of absolute filenames to SHA256. Include both summary and raw predictions. Checkpoint hashes, successful prior exit, unchanged command and artifact hashes must agree. Preserve the old failed state and use a new output directory. No completed training or business test is rerun. Six CPU tests include completed-stage reuse and rejection of changed artifacts. All final accuracy/performance results remain local.
