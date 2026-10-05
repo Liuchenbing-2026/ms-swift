@@ -14,14 +14,20 @@ export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True DECISION_PAD_MULTIPLE=128
 batch="${MICROBATCH:-1}"
 case "$batch" in 1|2|4) ;; *) echo 'MICROBATCH must be 1, 2 or 4' >&2; exit 2;; esac
 accumulation=$((4 / batch))
+callback=decision_throughput
+evaluation_plugin=()
+if [[ "${DECISION_EVAL_ONLY:-0}" == 1 ]]; then
+  callback=decision_checkpoint_eval
+  evaluation_plugin=("$(dirname "$PROBE_PLUGIN")/checkpoint_eval.py")
+fi
 extra=()
 if [[ -n "${RESUME_FROM:-}" ]]; then extra+=(--resume_from_checkpoint "$RESUME_FROM"); fi
 swift sft \
   --model "${MODEL_PATH:?Set MODEL_PATH}" --model_type qwen3_5_moe \
   --external_plugins "$PWD/decision_plugin.py" "$PWD/checkpoint_fence.py" \
     "$PWD/cpu_offload.py" "$PWD/lazy_cpu_init.py" "$PWD/checkpoint_space.py" \
-    "${PROBE_PLUGIN:?Set PROBE_PLUGIN}" "$(dirname "$PROBE_PLUGIN")/decision_sparse_logits.py" \
-  --callbacks decision_throughput \
+    "${PROBE_PLUGIN:?Set PROBE_PLUGIN}" "$(dirname "$PROBE_PLUGIN")/decision_sparse_logits.py" "${evaluation_plugin[@]}" \
+  --callbacks "$callback" \
   --template intern_decision_training --new_special_tokens '<decision>' \
   --tuner_type full --freeze_vit true --freeze_aligner true --freeze_llm false \
   --dataset "${TRAIN_DATA:-$PWD/decision_data/train.jsonl}" \

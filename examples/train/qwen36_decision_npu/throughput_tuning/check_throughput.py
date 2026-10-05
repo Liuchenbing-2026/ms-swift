@@ -12,6 +12,12 @@ from tune_microbatch import admissible, checkpoint_files, summarize
 
 class TrialChecks(unittest.TestCase):
     def test_owned_checkpoint_takeover_and_selection(self):
+        self.check_owned_run(False)
+
+    def test_evaluation_precedes_trials_without_updates(self):
+        self.check_owned_run(True)
+
+    def check_owned_run(self, evaluate):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             checkpoint = root / "checkpoint-300"
@@ -30,6 +36,17 @@ class TrialChecks(unittest.TestCase):
                     "container": "fixture", "container_output": "/trial",
                     "container_checkpoint": "/checkpoint", "continuation_output": "/continue",
                     "container_launcher": "/launcher.sh", "environment": {}}
+            if evaluate:
+                plan["evaluation_config"] = "/evaluation.json"
+                for name, step in (("eval-initial", 0), ("eval-checkpoint", 300)):
+                    folder = root / "results" / name
+                    folder.mkdir(parents=True)
+                    report = {"status": "complete", "checkpoint_step": step,
+                              "optimizer_updates_performed": 0,
+                              "suites": {"validation": {"correct": 1, "total": 2,
+                                  "accuracy": 0.5, "role": "validation",
+                                  "data_sha256": "same", "input_hash": "same"}}}
+                    (folder / "evaluation.json").write_text(json.dumps(report))
             path = root / "plan.json"
             path.write_text(json.dumps(plan))
             alive, commands = [True], []
@@ -64,7 +81,14 @@ class TrialChecks(unittest.TestCase):
             result = json.loads((root / "results/state.json").read_text())
             self.assertEqual(result["selected_microbatch"], 2)
             self.assertEqual(result["status"], "training_finished_pending_independent_evaluation")
-            self.assertEqual(len(commands), 4)
+            self.assertEqual(len(commands), 6 if evaluate else 4)
+            if evaluate:
+                self.assertIn("RESUME_FROM=", commands[0])
+                self.assertIn("RESUME_FROM=/checkpoint", commands[1])
+                for command in commands[:2]:
+                    self.assertIn("DECISION_EVAL_ONLY=1", command)
+                    self.assertIn("SAVE_STRATEGY=no", command)
+                self.assertEqual(result["evaluation_comparison"]["validation"]["accuracy_delta"], 0)
             self.assertIn("MICROBATCH=2", commands[-1])
             self.assertIn("DECISION_PROBE_UPDATES=0", commands[-1])
 

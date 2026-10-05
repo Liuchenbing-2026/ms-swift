@@ -111,14 +111,19 @@ def main():
         temporary.write_text(json.dumps(status, indent=2))
         temporary.replace(root / "state.json")
 
-    def run(batch, name, probe=True):
+    def run(batch, name, probe=True, evaluation=False, initial=False):
         env = dict(plan["environment"])
         env.update(MICROBATCH=str(batch), RESUME_FROM=plan["container_checkpoint"],
                    OUTPUT_DIR=plan["container_output"] + "/" + name if probe else plan["continuation_output"],
                    DECISION_PROBE_UPDATES="4" if probe else "0",
                    DECISION_PROBE_AUDIT="1" if probe else "0",
                    SAVE_STRATEGY="no" if probe else "steps",
-                   EVAL_STRATEGY="no" if probe else "steps")
+                   EVAL_STRATEGY="no" if probe else "steps",
+                   DECISION_EVAL_ONLY="1" if evaluation else "0")
+        if evaluation:
+            env["DECISION_EVAL_CONFIG"] = plan["evaluation_config"]
+        if initial:
+            env["RESUME_FROM"] = ""
         # A previous timed-out elastic worker must not overlap a new job.
         for output in status.get("launched_outputs", []):
             if output_processes(output):
@@ -131,7 +136,8 @@ def main():
         if probe:
             command += ["timeout", "--signal=TERM", "--kill-after=60s", "7200"]
         command += ["bash", plan["container_launcher"]]
-        persist(status="trial" if probe else "continuing", command=command, microbatch=batch)
+        phase = "evaluating" if evaluation else "trial" if probe else "continuing"
+        persist(status=phase, command=command, microbatch=batch)
         with (root / (name + ".log")).open("x") as handle:
             process = subprocess.Popen(command, stdout=handle, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
             persist(child_pid=process.pid)
@@ -144,6 +150,11 @@ def main():
             raise RuntimeError("Trial workers remain; refusing any overlapping continuation")
         if rc:
             raise RuntimeError(f"{name} exited {rc}; inspect its log")
+        if evaluation:
+            report = json.loads((root / name / "evaluation.json").read_text())
+            assert report["status"] == "complete" and report["optimizer_updates_performed"] == 0
+            assert report["checkpoint_step"] == (0 if initial else plan["checkpoint_step"])
+            return report
         if probe:
             return summarize(root / name, plan["checkpoint_step"])
 
@@ -181,6 +192,23 @@ def main():
         else:
             original_stopped = False  # Do not launch overlapping jobs.
             raise RuntimeError("Original workers did not exit; no new job launched")
+        if plan.get("evaluation_config"):
+            status["evaluations"] = {}
+            for name, initial in (("eval-initial", True), ("eval-checkpoint", False)):
+                status["evaluations"][name] = run(4, name, evaluation=True, initial=initial)
+                persist()
+            before = status["evaluations"]["eval-initial"]["suites"]
+            after = status["evaluations"]["eval-checkpoint"]["suites"]
+            assert before.keys() == after.keys()
+            for name in before:
+                for key in ("total", "role", "data_sha256", "input_hash"):
+                    assert before[name][key] == after[name][key], "Evaluation protocols differ"
+            status["evaluation_comparison"] = {name: {
+                "role": after[name]["role"], "initial_correct": before[name]["correct"],
+                "checkpoint_correct": after[name]["correct"], "total": after[name]["total"],
+                "accuracy_delta": after[name]["accuracy"] - before[name]["accuracy"]}
+                for name in before}
+            persist()
         baseline = run(1, "baseline")
         status["trials"]["1"] = baseline
         selected, best = 1, baseline["median_seconds"]
