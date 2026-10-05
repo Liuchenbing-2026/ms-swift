@@ -65,3 +65,13 @@ python multitask_validation.py --checkpoint /workspace/experiment/checkpoint-240
 ## 章节六 总结
 
 该分支提供一次预先固定的均衡数据干预，保留旧模型与失败证据。待完成独立训练、保存重载、三来源验证及最终业务/通用评测后，再报告收益与未达到的目标。
+
+## 固定训练后独立验收
+
+新增 `run_acceptance.py`，在计划中指定 `training_state` 为训练控制器的状态文件。只有固定240步训练、导出、重载验证完成且训练容器已停止后，才读取导出权重并执行业务2,000条、官方七项、扩展49项。它不按测试成绩选择checkpoint，也不将测试记录回流训练。
+
+```bash
+python run_acceptance.py --plan "$ACCEPTANCE_PLAN_JSON"
+```
+
+计划使用父分支联合训练评测的 `host_workspace`、`training_container`、`checkpoint_step`、`pinned_files`、`free_device_check` 和三个 `stages` 字段。新权重使用独立输出和新的评测容器挂载；不得复用旧权重预测。业务batch4、官方七项batch8、扩展49项batch1参考模式分别记录，最终原始精度性能仅本地保存。
