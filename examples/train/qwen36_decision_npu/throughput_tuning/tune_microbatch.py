@@ -9,6 +9,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import signal
 import statistics
 import subprocess
@@ -54,6 +55,22 @@ def checkpoint_files(path, step):
             raise ValueError("Empty checkpoint file: " + name)
         stats[name] = (st.st_size, st.st_mtime_ns)
     return stats
+
+
+def check_idle_resume(plan):
+    """Adopt an already stopped run without signalling any process."""
+    if any(identity(int(pid)) == expected for pid, expected in plan["owned_pids"].items()):
+        raise RuntimeError("An original worker is still alive; refusing saved-checkpoint takeover")
+    for output in plan["previous_outputs"] + [plan["continuation_output"]]:
+        if output_processes(output):
+            raise RuntimeError("Previous output still has live workers: " + output)
+    devices = plan["physical_devices"]
+    if len(devices) != 4 or len(set(devices)) != 4:
+        raise ValueError("Expected four distinct physical devices")
+    report = subprocess.check_output(["npu-smi", "info"], text=True, timeout=30)
+    for device in devices:
+        if not re.search(r"No running processes found in NPU " + str(int(device)) + r"\s*\|", report):
+            raise RuntimeError("Device is occupied or its idle status is unknown: " + str(device))
 
 
 def summarize(folder, start, updates=4):
@@ -103,6 +120,8 @@ def main():
     plan = json.loads(Path(args.plan).read_text())
     root = Path(plan["host_output"])
     root.mkdir(parents=True, exist_ok=True)
+    if (root / "state.json").exists():
+        raise FileExistsError("Use a fresh output directory; preserve prior controller evidence")
     status = {"status": "waiting_for_checkpoint", "trials": {}}
 
     def persist(**fields):
@@ -164,7 +183,9 @@ def main():
     try:
         deadline = time.monotonic() + plan.get("wait_seconds", 86400)
         while time.monotonic() < deadline:
-            if any(identity(int(pid)) != expected for pid, expected in plan["owned_pids"].items()):
+            if plan.get("resume_saved_checkpoint"):
+                check_idle_resume(plan)
+            elif any(identity(int(pid)) != expected for pid, expected in plan["owned_pids"].items()):
                 raise RuntimeError("Original training process identity changed; refusing to take over")
             try:
                 before = checkpoint_files(checkpoint, plan["checkpoint_step"])
@@ -178,20 +199,25 @@ def main():
             raise TimeoutError("Checkpoint deadline exceeded; original training left untouched")
         # Only the explicitly owned torchrun launcher is signalled. torchrun
         # terminates its own workers. No container-wide or device-wide kill.
-        launcher = int(plan["launcher_pid"])
-        assert identity(launcher) == plan["owned_pids"][str(launcher)]
-        command = Path(f"/proc/{launcher}/cmdline").read_bytes()
-        assert b"torch.distributed.run" in command and plan["original_master_port"].encode() in command
-        persist(status="stopping_original_after_save", checkpoint_inventory=before)
-        os.kill(launcher, signal.SIGTERM)
-        original_stopped = True
-        for _ in range(120):
-            if all(identity(int(pid)) != expected for pid, expected in plan["owned_pids"].items()):
-                break
-            time.sleep(1)
+        if plan.get("resume_saved_checkpoint"):
+            check_idle_resume(plan)
+            persist(status="resuming_saved_checkpoint", checkpoint_inventory=before)
+            original_stopped = True
         else:
-            original_stopped = False  # Do not launch overlapping jobs.
-            raise RuntimeError("Original workers did not exit; no new job launched")
+            launcher = int(plan["launcher_pid"])
+            assert identity(launcher) == plan["owned_pids"][str(launcher)]
+            command = Path(f"/proc/{launcher}/cmdline").read_bytes()
+            assert b"torch.distributed.run" in command and plan["original_master_port"].encode() in command
+            persist(status="stopping_original_after_save", checkpoint_inventory=before)
+            os.kill(launcher, signal.SIGTERM)
+            original_stopped = True
+            for _ in range(120):
+                if all(identity(int(pid)) != expected for pid, expected in plan["owned_pids"].items()):
+                    break
+                time.sleep(1)
+            else:
+                original_stopped = False  # Do not launch overlapping jobs.
+                raise RuntimeError("Original workers did not exit; no new job launched")
         if plan.get("evaluation_config"):
             status["evaluations"] = {}
             for name, initial in (("eval-initial", True), ("eval-checkpoint", False)):
@@ -232,7 +258,11 @@ def main():
         persist(status="failed", error=str(error))
         if original_stopped:
             persist(status="restoring_original_configuration")
-            run(1, "fallback-continuation", probe=False)
+            try:
+                run(1, "fallback-continuation", probe=False)
+            except Exception as fallback_error:
+                persist(status="failed", fallback_error=str(fallback_error))
+                raise
             persist(status="training_finished_pending_independent_evaluation")
         else:
             raise

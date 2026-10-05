@@ -11,13 +11,38 @@ from tune_microbatch import admissible, checkpoint_files, summarize
 
 
 class TrialChecks(unittest.TestCase):
+    def test_idle_resume_rejects_busy_unknown_and_owned_workers(self):
+        plan = {"owned_pids": {"123": "old"}, "previous_outputs": ["/old"],
+                "continuation_output": "/continue", "physical_devices": [0, 1, 2, 3]}
+        free = "\n".join(f"| No running processes found in NPU {i} |" for i in range(4))
+        with patch.object(tune_microbatch, "identity", return_value=None), \
+                patch.object(tune_microbatch, "output_processes", return_value=[]), \
+                patch.object(tune_microbatch.subprocess, "check_output", return_value=free) as report:
+            tune_microbatch.check_idle_resume(plan)
+            report.return_value = free.replace("NPU 3", "NPU 30")
+            with self.assertRaises(RuntimeError):
+                tune_microbatch.check_idle_resume(plan)
+            report.return_value = free
+            with patch.object(tune_microbatch, "identity", return_value="old"):
+                with self.assertRaises(RuntimeError):
+                    tune_microbatch.check_idle_resume(plan)
+            with patch.object(tune_microbatch, "output_processes", return_value=[123]):
+                with self.assertRaises(RuntimeError):
+                    tune_microbatch.check_idle_resume(plan)
+
+    def test_saved_checkpoint_resume(self):
+        self.check_owned_run(False, saved=True)
+
+    def test_fallback_failure_is_not_reported_as_running(self):
+        self.check_owned_run(False, saved=True, fail=True)
+
     def test_owned_checkpoint_takeover_and_selection(self):
         self.check_owned_run(False)
 
     def test_evaluation_precedes_trials_without_updates(self):
         self.check_owned_run(True)
 
-    def check_owned_run(self, evaluate):
+    def check_owned_run(self, evaluate, saved=False, fail=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             checkpoint = root / "checkpoint-300"
@@ -36,6 +61,9 @@ class TrialChecks(unittest.TestCase):
                     "container": "fixture", "container_output": "/trial",
                     "container_checkpoint": "/checkpoint", "continuation_output": "/continue",
                     "container_launcher": "/launcher.sh", "environment": {}}
+            if saved:
+                plan.update(resume_saved_checkpoint=True, previous_outputs=["/old"],
+                            physical_devices=[0, 1, 2, 3])
             if evaluate:
                 plan["evaluation_config"] = "/evaluation.json"
                 for name, step in (("eval-initial", 0), ("eval-checkpoint", 300)):
@@ -49,7 +77,7 @@ class TrialChecks(unittest.TestCase):
                     (folder / "evaluation.json").write_text(json.dumps(report))
             path = root / "plan.json"
             path.write_text(json.dumps(plan))
-            alive, commands = [True], []
+            alive, commands = [not saved], []
 
             class Completed:
                 pid = 456
@@ -58,7 +86,7 @@ class TrialChecks(unittest.TestCase):
                     commands.append(command)
 
                 def wait(self):
-                    return 0
+                    return 1 if fail else 0
 
             def summary(folder, step):
                 batch = {"baseline": 1, "batch2": 2, "batch4": 4}[folder.name]
@@ -74,11 +102,22 @@ class TrialChecks(unittest.TestCase):
                     patch.object(tune_microbatch, "output_processes", lambda output: []), \
                     patch.object(tune_microbatch, "summarize", summary), \
                     patch.object(tune_microbatch.subprocess, "Popen", Completed), \
+                    patch.object(tune_microbatch.subprocess, "check_output", return_value="\n".join(
+                        f"| No running processes found in NPU {i} |" for i in range(4))), \
                     patch.object(tune_microbatch.os, "kill", stop), \
                     patch.object(tune_microbatch.time, "sleep", lambda seconds: None), \
                     patch.object(Path, "read_bytes", return_value=b"torch.distributed.run\0--master_port\0" + b"29651"):
-                tune_microbatch.main()
+                if fail:
+                    with self.assertRaises(RuntimeError):
+                        tune_microbatch.main()
+                else:
+                    tune_microbatch.main()
             result = json.loads((root / "results/state.json").read_text())
+            if fail:
+                self.assertEqual(result["status"], "failed")
+                self.assertIn("fallback-continuation exited", result["fallback_error"])
+                self.assertEqual(len(commands), 2)
+                return
             self.assertEqual(result["selected_microbatch"], 2)
             self.assertEqual(result["status"], "training_finished_pending_independent_evaluation")
             self.assertEqual(len(commands), 6 if evaluate else 4)

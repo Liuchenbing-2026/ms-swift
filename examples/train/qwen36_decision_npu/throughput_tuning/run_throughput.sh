@@ -45,5 +45,5 @@ swift sft \
   --eval_strategy "${EVAL_STRATEGY:-no}" --eval_steps 150 \
   --load_best_model_at_end false --save_only_model false --save_total_limit 1 \
   --logging_steps 1 --report_to none --seed 42 --data_seed 42 \
-  --dataset_num_proc 1 --dataloader_num_workers 0 \
+  --dataset_num_proc 1 --dataloader_num_workers 0 --dataloader_pin_memory false \
   --output_dir "$OUTPUT_DIR" --add_version false "${extra[@]}"
