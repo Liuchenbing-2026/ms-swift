@@ -5,6 +5,7 @@ export PYTHONPATH="$PWD:${PYTHONPATH:-}"
 export OMP_NUM_THREADS=4 TOKENIZERS_PARALLELISM=false
 export HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1
 export DECISION_PAD_MULTIPLE=128
+export DECISION_DISABLE_THP=1
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 unset ACCELERATE_USE_FSDP FSDP_VERSION NPROC_PER_NODE
 # One visible physical card, full language-backbone training. Final weights only;

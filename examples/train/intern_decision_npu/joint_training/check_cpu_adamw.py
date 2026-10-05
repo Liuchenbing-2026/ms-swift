@@ -12,6 +12,7 @@ def main():
                                   {'params': [reference[1]], 'weight_decay': 0.0}], lr=1e-3, foreach=False)
     actual = CPUAdamW([{'params': [device[0]], 'weight_decay': 0.1},
                       {'params': [device[1]], 'weight_decay': 0.0}], expected.defaults)
+    addresses = None
     for step in range(5):
         for left, right in zip(expected.param_groups, actual.param_groups):
             left['lr'] = right['lr'] = 1e-3 / (step + 1)
@@ -21,13 +22,17 @@ def main():
             right.grad = None if grad is None else grad.to('npu:0')
         expected.step()
         actual.step()
+        current = [actual._grad_buffers[p].data_ptr() for p in device]
+        if addresses is not None:
+            assert current == addresses, 'Gradient buffers must be reused'
+        addresses = current
         for left, right in zip(reference, device):
             torch.testing.assert_close(left, right.cpu(), rtol=0, atol=0)
         state = actual.state_dict()
         actual.load_state_dict(state)
         assert all(value.device.type == 'cpu' for values in actual.cpu_optimizer.state.values()
                    for value in values.values() if isinstance(value, torch.Tensor))
-    print('PASS: five FP32 NPU updates, parameter groups, LR changes, missing gradients, state roundtrip')
+    print('PASS: five FP32 NPU updates, groups, LR changes, missing gradients, state roundtrip, buffer reuse')
 
 
 if __name__ == '__main__':
