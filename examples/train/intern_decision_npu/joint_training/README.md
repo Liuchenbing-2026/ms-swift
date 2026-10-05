@@ -12,11 +12,11 @@
 
 训练前以BF16推理评测已有权重的单题和联合验证准确率；训练结束后导出BF16权重、重载后重复同一验证集并检查完整覆盖及输入哈希。旧权重不覆盖；不读取测试金标做训练、调参、早停或选模。prepare_joint仅对test/calibration执行案例ID隔离审计，不将其编译为训练输入。
 
-最终精度、性能与原始预测只存本地。官方七项和扩展49项不在本阶段内。相较旧权重的收益包含额外训练预算影响，缺少等预算单题继续训练对照时，不把收益全部归因于联合格式。本轮没有服务压测。
+最终精度、性能与原始预测只存本地。联合训练调度器只检查validation；独立验收调度器等待固定120步产物保存和重载检查结束，再顺序执行业务专项、扩展49项和官方七项。它不按测试分数选择或再次训练权重。相较旧权重的收益包含额外训练预算影响，缺少等预算单题继续训练对照时，不把收益全部归因于联合格式。本轮没有服务压测。
 
 ## 章节三 复现分支和指导
 
-任务分支：个人MS-SWIFT `task19_4b_joint_training`，基于4B分支`intern_decision_4b_npu`的`e815cb65efcb27c00c3cc5524603d6916ab5a112`；交付完整SHA记录在任务书。复用decision_schema.py和decision_plugin.py，新增数据准备、联合/单题验证、CPU AdamW、数值检查、单卡启动器及持久调度器；不修改训练框架内部或原生算子。
+任务分支：个人MS-SWIFT `task19_4b_joint_training`，基于4B分支`intern_decision_4b_npu`的`e815cb65efcb27c00c3cc5524603d6916ab5a112`；交付完整SHA记录在任务书。复用decision_schema.py和decision_plugin.py，新增数据准备、联合/单题验证、CPU AdamW、数值检查、单卡启动器、持久调度器及最终验收调度/CPU检查；不修改训练框架内部或原生算子。
 
 基础镜像：`quay.nju.edu.cn/ascend/ms-swift:v4.5.2-cann9.1.0-torch_npu2.10.0.post2-910b-ubuntu22.04-py3.12`。
 registry digest：`sha256:d1b56f2d77882edb92615c45641556c8d5adaf8ed360be73f4f0978f70fa01c1`；本地image ID：`sha256:ff2ea9131d5fdf8cf390171dd7af28fd3420646b2e010faf75dc004f58f8dc97`。不用导出镜像。本轮复用镜像内MS-SWIFT `ff5128777dd3dc5538f1a95fbcc29442c327d7d2`，外部插件从本任务分支取得。采用CANN9.1、Torch2.10、torch_npu2.10.0.post2及镜像匹配的Transformers环境，不新增编译依赖。
@@ -87,6 +87,27 @@ END
 ```
 
 首步可能含编译，不用它估计稳定吞吐。完整端到端还包括初始验证、导出和重载验证。输出为pipeline-state.json、阶段日志、experiment/progress.json、BF16 checkpoint、validation-after.json、reload-validation.json及comparison.json。程序仅停止plan指定的本实验专用容器，不管理其他训练任务；不重复启动已有pipeline-state目录。
+
+### 固定120步产物的完整验收
+
+`run_acceptance.py --plan "$PRIVATE_ACCEPTANCE_PLAN"`在宿主等待训练状态`validation_complete`且训练容器已停止，核对120步BF16导出、保存权重SHA256，才依次执行下面三组命令。业务与49项使用训练镜像；七项复用此前固定的NPU评测环境，镜像为`quay.nju.edu.cn/ascend/vllm-ascend@sha256:2c8aac4281e56953764a7fa60773cec734342d32d9d6d76c0c8f3a8660a64b85`，image ID `sha256:4f7bc48083e5efc9f506bba85c1de16361e3f40cf5dc0220ae54712863ed7d18`，实际Torch2.10.0、torch_npu2.10.0.post4、Transformers5.14.1。这里只调用原生NPU backend。推理核心沿用个人Intern-Decision `intern_decision`的`c025a7d1a516d792b6f32df0e14cbf7c1471d41c`；各源文件及评测数据hash另由私有plan固定，逐阶段核验。
+
+```bash
+# 在原训练环境内；EVAL_CODE提供原4B分支的评测脚本与decision_schema。
+python "$EVAL_CODE/evaluate_decision.py" --checkpoint "$FINAL_CHECKPOINT" \
+  --data "$PREPARED_TEST" --output "$RESULTS/business.json" --batch-size 4
+python "$EVAL_CODE/evaluate_laya_suite.py" --checkpoint "$FINAL_CHECKPOINT" \
+  --dataset "$LAYA_SUITES" --typed-data "$PREPARED_TEST" \
+  --typed-result "$RESULTS/business.json" --output "$RESULTS/broad49" --batch-size 8
+# 在固定独立NPU评测环境和Intern-Decision源码目录中：
+python -m src.eval.jev --backend npu --checkpoint "$FINAL_CHECKPOINT" \
+  --suite --batch-size 8 --output "$RESULTS/official7"
+python -m unittest discover -s . -p 'check_acceptance.py'
+```
+
+私有plan需填写`host_workspace`、`training_container`、`checkpoint_step:120`、`wait_seconds`、`pinned_files`（源码及数据绝对路径→SHA256）、`free_device_check`（只读确认目标设备空闲的命令数组），以及顺序为business/broad49/official7的`stages`。每阶段包含`name/container/command/result/timeout_seconds`；command为实际docker exec参数数组，result为对应JSON的宿主路径。容器须预先创建并停止，使用同一张授权设备，将checkpoint和评测输入只读挂载、结果写入独立目录；确认容器私有/dev后仅保留该设备。不得写入主机/IP/凭据至公开plan。
+
+调度器不启动新训练、不选择测试最优模型。设备被占用时失败留证，不终止其他进程；每阶段最多4小时，结束只停止自身启动的专用容器。训练失败、验证未完成、源码/数据漂移或覆盖数不符均不得标记评测完成。固定覆盖分别为2000决策、49项17416有效决策、七项10751行/12351决策；49项原协议的500个超候选上限决策单列排除，不混入有效分母。`final-evaluation/state.json`记录实际状态；完成仅表示固定checkpoint评测结束，不代表达到目标精度。
 
 ## 章节五 问题列表
 
