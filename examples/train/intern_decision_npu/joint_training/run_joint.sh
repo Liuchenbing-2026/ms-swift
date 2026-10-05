@@ -27,5 +27,5 @@ swift sft \
   --max_steps "${TOTAL_STEPS:-120}" --save_strategy no \
   --save_only_model true --save_total_limit 1 --eval_strategy no \
   --logging_steps 1 --report_to none --seed 42 --data_seed 42 \
-  --dataset_num_proc 1 --dataloader_num_workers 0 \
+  --dataset_num_proc 1 --dataloader_num_workers 0 --dataloader_pin_memory false \
   --output_dir "${OUTPUT_DIR:?Set a fresh output directory}" --add_version false
