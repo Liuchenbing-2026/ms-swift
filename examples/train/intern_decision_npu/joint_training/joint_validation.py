@@ -100,7 +100,8 @@ class JointValidation(TrainerCallback):
     def on_train_end(self, args, state, control, **kwargs):
         # Export inference weights after the last optimizer update. FP32 training
         # parameters are preserved until training ends; no optimizer resume is claimed.
-        self.trainer.model.to(dtype=torch.bfloat16)
+        from export_dtype import cast_parameters_for_export
+        cast_parameters_for_export(self.trainer.model)
         self.run(args, 'validation-after')
         destination = Path(args.output_dir) / ('checkpoint-' + str(state.global_step))
         self.trainer.save_model(str(destination))

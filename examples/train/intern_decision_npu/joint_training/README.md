@@ -122,3 +122,20 @@ python -m unittest discover -s . -p 'check_acceptance.py'
 ## 章节六 总结
 
 这是4B精度提升的联合字段训练阶段，独立分支、独立容器和输出，旧最优权重及测试集保留。实测范围与进展更新到任务书，未完成训练或综合验收时不得宣称模型已达标。
+
+## Export precision recovery
+
+A completed fixed-step run can fail the in-memory versus reload check because a whole-model `to(bfloat16)` also rounds nonpersistent FP32 rotary frequency buffers. Canonical loading regenerates those buffers in FP32. The export helper now preserves buffer values/dtypes while converting parameters; it does not change the training objective or optimizer. Existing saved weights are preserved.
+
+Run an independent diagnostic in the same pinned training environment:
+
+```bash
+python check_export_runtime.py --checkpoint "$FIXED_CHECKPOINT" \
+  --data "$VALIDATION_JSONL" --output "$NEW_EXPORT_AUDIT_DIR"
+python check_acceptance.py
+python run_acceptance.py --plan "$PRIVATE_ACCEPTANCE_PLAN"
+```
+
+The diagnostic checks every saved tensor against the loaded model, binds all checkpoint files by SHA256, repeats canonical validation, and compares explicit whole-model cast and autocast paths. Results are private artifacts. In a recovery plan, set `export_runtime_audit` to this completed audit directory and use a fresh `output_directory`. The acceptance gate requires exact canonical prediction/probability repeatability, exact reproduction of the prior in-memory output by the buffer cast, unchanged checkpoint hashes, and only nonpersistent FP32-to-BF16 inverse-frequency buffer changes. It retains the original pipeline failure and explicitly records canonical reload as the assessment runtime. This path rejects other pipeline errors; it does not weaken the original zero-change check or rerun training.
+
+Keep the predeclared checkpoint step, three test suites and all pinned evaluator/data hashes unchanged. Stop the owned diagnostic container after its process exits, then let the acceptance driver acquire the reserved free device. No test score selects a model or training setting. Four CPU acceptance tests cover the ordinary path, failure/device isolation and recovery rejection after weight or prediction changes. New export-helper validation is separate from the previously completed training run.

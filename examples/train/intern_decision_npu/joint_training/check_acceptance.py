@@ -46,6 +46,37 @@ class AcceptanceTests(unittest.TestCase):
                 state = json.loads((root / 'final-evaluation/state.json').read_text())
                 return state, calls, popen.call_count
 
+    def test_export_recovery_requires_matching_weights_and_repeatable_predictions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary);audit = root / 'audit';audit.mkdir()
+            checkpoint = root / 'experiment/checkpoint-120';checkpoint.mkdir(parents=True)
+            weight = checkpoint / 'model.safetensors';weight.write_bytes(b'fixture')
+            def put(path, value):
+                path.write_text(json.dumps(value))
+            put(root / 'pipeline-state.json', {'status': 'failed', 'error': 'Reload changed decisions'})
+            put(root / 'experiment/export.json', {'step': 120})
+            put(audit / 'complete.json', {'status': 'complete'})
+            put(audit / 'weights.json', {'all_stored_tensors_exact': True, 'tensor_count': 1,
+                'checkpoint_sha256': {weight.name: run_acceptance.sha256(weight)}})
+            put(audit / 'buffers.json', [{'name': 'rotary.inv_freq', 'persistent': False,
+                'before_dtype': 'torch.float32', 'after_dtype': 'torch.bfloat16'}])
+            rows = [{'case_id': str(i), 'field': 'x', 'input_hash': str(i),
+                     'prediction': 'yes', 'probabilities': [0.4, 0.6]} for i in range(600)]
+            data = {mode: {'predictions': rows} for mode in ('joint', 'single')}
+            for path in [audit / 'canonical-repeat.json', audit / 'cast-all-bf16.json',
+                         root / 'reload-validation.json', root / 'experiment/validation-after.json']:
+                put(path, data)
+            self.assertEqual(run_acceptance.verify_export_recovery(root, audit)['assessment_runtime'],
+                             'canonical checkpoint reload')
+            bad = json.loads(json.dumps(data));bad['joint']['predictions'][0]['prediction'] = 'no'
+            put(audit / 'canonical-repeat.json', bad)
+            with self.assertRaises(AssertionError):
+                run_acceptance.verify_export_recovery(root, audit)
+            put(audit / 'canonical-repeat.json', data)
+            weight.write_bytes(b'changed')
+            with self.assertRaises(AssertionError):
+                run_acceptance.verify_export_recovery(root, audit)
+
     def test_completed_fixed_checkpoint_runs_all_suites(self):
         state, calls, launched = self.execute()
         self.assertEqual(state['status'], 'complete')
