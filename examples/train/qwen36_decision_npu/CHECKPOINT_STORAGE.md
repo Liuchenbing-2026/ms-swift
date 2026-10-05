@@ -76,3 +76,62 @@ insufficient-space rejection. Host/container mount mapping has been exercised
 on the running training environment. Full model restoration and subsequent
 checkpoint rotation require separate validation. These utilities do not claim
 to improve training step time.
+
+## Follow Trainer retention without deleting a retained checkpoint
+
+`rotate_checkpoint_storage.py` is an optional companion to the task19
+microbatch tuning driver. It waits until the throughput trials have ended and
+the continuation has advanced beyond a newly saved checkpoint. It inventories
+all 16 model/optimizer/metadata/scheduler/RNG/trainer files twice. It never
+removes checkpoint directories: the configured Trainer retention policy must
+already have removed the old checkpoint directory before its managed spill
+copies are eligible for reclamation.
+
+The initial relocation manifest is an allowlist. Every deleted file must have
+been copied and linked successfully, still have its recorded size and a single
+hardlink, and be inside the expected spill directory. Any remaining reference
+from the training output tree prevents reclamation. Unrelated files, retained
+checkpoints, and the spill directories themselves are preserved.
+
+After reclaiming eligible orphan files, the existing SHA256-verified relocation
+helper moves the configured shards of the new checkpoint, preserving the same
+reserve. This happens outside timed throughput trials. At the final checkpoint,
+only obsolete spill copies are reclaimed; the final checkpoint is not moved.
+Space used by unrelated workloads can still exhaust the reserve and cause a
+safe failure. The helper does not bypass the training storage guard, restart
+training, or prove that a future checkpoint has been successfully reloaded.
+
+The actual training image, dependencies and original launch/evaluation commands
+remain those in task19's `镜像分支与执行命令.md`; this host-side utility needs only
+Python 3.10+ and the relocation helper from the same branch, with the existing
+host/container mounts already checked. No image export or new package is needed.
+
+```bash
+python3 check_checkpoint_rotation.py
+python3 rotate_checkpoint_storage.py --plan /secure/local-storage-plan.json
+```
+
+Example plan (replace paths with the already verified isolated workspace):
+
+```json
+{
+  "training_root": "/work/task19/outputs/train",
+  "spill_root": "/work/task19/.checkpoint-spill",
+  "output": "/work/task19/storage-rotation",
+  "initial_manifest": "/work/task19/checkpoint-spill-150.json",
+  "progress": "/work/task19/progress.json",
+  "tuning_state": "/work/task19/throughput-tuning/real-trials/state.json",
+  "steps": [300, 450, 600],
+  "files": ["optimizer_0/__1_0.distcp", "optimizer_0/__2_0.distcp", "pytorch_model_fsdp_0/__1_0.distcp"],
+  "reserve_gib": 18,
+  "timeout_seconds": 259200
+}
+```
+
+Keep the plan and all manifests local. `state.json` distinguishes waiting,
+reclaiming, relocating, completion and failure. Existing state prevents an
+unreviewed restart after a partial copy. Inspect both state and per-file
+relocation records before retrying; never start a second keeper over the same
+storage. CPU tests exercise retained-checkpoint protection, remaining symlink
+references, unexpected file changes, and idempotent orphan reclamation. They
+do not substitute for a complete real-model rotation cycle.
