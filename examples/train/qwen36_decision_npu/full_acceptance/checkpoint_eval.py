@@ -40,7 +40,7 @@ class CheckpointEvaluation(TrainerCallback):
             assert len(rows)==suite['expected_rows']
             keys=[(r['case_id'],f) for r in rows for f in r['fields']]
             assert len(keys)==len(set(keys))==suite['expected_decisions']
-            assert not ({r['case_id'] for r in rows}&train_ids)
+            assert not ({r.get('source_case_id',r['case_id']) for r in rows}&train_ids)
             jobs=[]
             for row in rows:
                 assert json.dumps(row['messages'],sort_keys=True,ensure_ascii=False) not in train_messages

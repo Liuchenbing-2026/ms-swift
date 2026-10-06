@@ -52,3 +52,5 @@ PYTHONPATH="$THROUGHPUT_CONTROLLER_CODE" python run_acceptance.py --plan "$PLAN_
 # 章节六 总结
 
 完整验收完成后才报告结果，状态文件与分套覆盖共同构成证据。Twinkle真实35B训练是独立后续工作，不能用SWIFT结果代替。
+
+官方ToolACE文件存在重复原始ID，按物理行身份保留全部310条；输出同时保留原始ID和独立行身份，不去重、不改变输入或标签。案例隔离检查仍使用原始ID。首次准备因将原始ID当唯一键而拒绝执行，修正后重新准备；失败文件保留，仅用于诊断。

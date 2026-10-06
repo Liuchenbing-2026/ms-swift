@@ -50,10 +50,13 @@ def main():
         path=a.official_root/file;manifest['source_sha256'][file]=hashlib.sha256(path.read_bytes()).hexdigest()
         raw=[json.loads(line) for line in path.read_text().splitlines()];assert len(raw)==count
         rows=[]
-        for row in raw:
+        for line_index,row in enumerate(raw):
             if 'questions' not in row:
                 row={'id':row['id'],'state':row['state'],'questions':{'decision':row['question']},'targets':{'decision':{'label':row['expected']}}}
-            rows.append(pack(row))
+            record=pack(row)
+            record["source_case_id"]=record["case_id"]
+            record["case_id"]=name+":"+str(line_index)
+            rows.append(record)
         save('official-'+name,rows,decisions,'official',8)
     manifest['source_sha256']['broad']=hashlib.sha256(a.broad.read_bytes()).hexdigest()
     for name,suite in sorted(json.loads(a.broad.read_text())['suites'].items()):
