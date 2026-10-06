@@ -60,3 +60,16 @@ CPU 参数/梯度卸载和 FSDP 重计算均可能增加耗时。去除重计算
 # 章节六 总结
 
 本改动提供可回退的重计算消融试验与已完成探针的可核验复用。CPU 检查覆盖存活控制器拒绝、记录及 checkpoint 一致性、候选配置传入接续；不能替代真实大模型训练验收。
+
+## 固定训练结束后的独立精度检查
+
+`final_evaluation.py`等待训练控制器记录完整预算结束，并等待存储轮换完成，确认设备空闲及断点文件稳定后，调用既有只读评测插件。它不停止训练、不执行优化器更新，也不选择checkpoint；输入、代码固定，结果与前一保存点的相同验证/业务口径核对。
+
+```bash
+python check_final_evaluation.py
+python final_evaluation.py --plan "$FINAL_EVALUATION_PLAN"
+```
+
+计划沿用容器、四卡空闲检查、原进程身份、固定完整断点及环境字段；新增 `training_state`、`storage_state`、`pinned_files`（宿主文件SHA256）、`evaluation_config`（容器路径）和 `previous_evaluation`（前一保存点评测JSON）。`host_output`与`container_output`指向同一挂载下全新目录，`checkpoint_step`明确设为固定预算末步。任一上游失败或输入/断点变化均停止，禁止把失败标记成完成。等待期间不占设备；评测失败不重启训练。
+
+这是验证集和业务专项的独立检查，不代表已完成官方七项或扩展49项的35B验收。训练更新耗时、评测、保存与恢复耗时分别记录，不能把探针速度当成整个任务耗时。
