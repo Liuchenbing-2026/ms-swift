@@ -12,7 +12,8 @@ included in the input. All seven suites contain 10,751 rows and 12,351 decisions
 the final score is the unweighted mean of the seven suite accuracies.
 
 The optional inference recipe uses two allocated NPUs, BF16 model loading and
-FSDP without CPU offload. These settings reduce evaluation memory and transfer
+FSDP without CPU offload. Disable training autocast for this BF16-only
+evaluation, avoiding Accelerate creating FP32 master parameters. These settings reduce evaluation memory and transfer
 cost; they do not change weights on disk. They differ from the historical
 four-rank FP32-load/BF16-compute training evaluation, so do not claim bitwise
 numerical equivalence. Run the existing small-model execution check first.
@@ -21,7 +22,7 @@ numerical equivalence. Run the existing small-model execution check first.
 export TRAIN_WORKSPACE='<TASK_WORKSPACE>'
 export MODEL_PATH='<ORIGINAL_CHECKPOINT>'
 export ASCEND_RT_VISIBLE_DEVICES='<TWO_ASSIGNED_NPU_IDS>'
-export NPROC_PER_NODE=2 EVAL_LOAD_DTYPE=bfloat16
+export NPROC_PER_NODE=2 EVAL_LOAD_DTYPE=bfloat16 EVAL_AUTOCAST_BF16=false
 export ACCEPTANCE_CODE="$TRAIN_WORKSPACE/full_acceptance"
 export PROBE_PLUGIN="$TRAIN_WORKSPACE/throughput_tuning/throughput_probe.py"
 export FULL_EVAL_PLUGIN="$ACCEPTANCE_CODE/checkpoint_eval.py"
