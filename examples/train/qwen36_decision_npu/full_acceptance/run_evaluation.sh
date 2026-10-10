@@ -4,7 +4,7 @@ set -euo pipefail
 cd "${TRAIN_WORKSPACE:?Set TRAIN_WORKSPACE}"
 : "${OUTPUT_DIR:?Use a separate output directory for each probe}"
 export ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0,1,2,3}"
-export NPROC_PER_NODE=4 MASTER_PORT="${MASTER_PORT:-29661}"
+export NPROC_PER_NODE="${NPROC_PER_NODE:-4}" MASTER_PORT="${MASTER_PORT:-29661}"
 export ACCELERATE_USE_FSDP=true FSDP_CPU_RAM_EFFICIENT_LOADING=true FSDP_VERSION=2
 export OMP_NUM_THREADS=16 TOKENIZERS_PARALLELISM=false HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1
 export PYTHONPATH="$PWD:${PYTHONPATH:-}"
@@ -35,7 +35,7 @@ swift sft \
   --remove_unused_columns false --strict true --split_dataset_ratio 0 \
   --enable_thinking false --max_length 8192 --truncation_strategy delete \
   --packing false --padding_free false --attn_impl sdpa \
-  --torch_dtype float32 --bf16 true --fp16 false --fsdp "${FSDP_CONFIG:-$PWD/fsdp2-sharded.json}" \
+  --torch_dtype "${EVAL_LOAD_DTYPE:-float32}" --bf16 true --fp16 false --fsdp "${FSDP_CONFIG:-$PWD/fsdp2-sharded.json}" \
   --gradient_checkpointing false --use_logits_to_keep true --accelerator_config "$PWD/accelerator.json" \
   --per_device_train_batch_size "$batch" --gradient_accumulation_steps "$accumulation" \
   --per_device_eval_batch_size 1 --learning_rate 2e-6 \
