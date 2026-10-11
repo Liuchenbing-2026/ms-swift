@@ -23,7 +23,7 @@ fi
 extra=()
 if [[ -n "${RESUME_FROM:-}" ]]; then extra+=(--resume_from_checkpoint "$RESUME_FROM"); fi
 swift sft \
-  --model "${MODEL_PATH:?Set MODEL_PATH}" --model_type qwen3_5_moe \
+  --model "${MODEL_PATH:?Set MODEL_PATH}" --model_type "${MODEL_TYPE:-qwen3_5_moe}" \
   --external_plugins "$PWD/decision_plugin.py" "$PWD/checkpoint_fence.py" \
     "$PWD/cpu_offload.py" "$PWD/lazy_cpu_init.py" "$PWD/checkpoint_space.py" \
     "${PROBE_PLUGIN:?Set PROBE_PLUGIN}" "$(dirname "$PROBE_PLUGIN")/decision_sparse_logits.py" "${evaluation_plugin[@]}" \
