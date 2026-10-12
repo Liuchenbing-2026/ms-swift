@@ -49,7 +49,8 @@ class ProgressCallbackNew(ProgressCallback):
             self.prediction_bar.update()
 
     def on_log(self, args: TrainingArguments, state: TrainerState, control, logs=None, **kwargs):
-        add_train_message(logs, state, self.start_time, self.start_step)
+        if hasattr(self, 'start_time'):
+            add_train_message(logs, state, self.start_time, self.start_step)
         if not is_pai_training_job() and state.is_world_process_zero:
             jsonl_path = os.path.join(args.output_dir, 'logging.jsonl')
             append_to_jsonl(jsonl_path, logs)
@@ -92,7 +93,8 @@ class PrinterCallbackNew(PrinterCallback):
         return super().on_train_begin(args, state, control, **kwargs)
 
     def on_log(self, args, state, control, logs=None, **kwargs):
-        add_train_message(logs, state, self.start_time, self.start_step)
+        if hasattr(self, 'start_time'):
+            add_train_message(logs, state, self.start_time, self.start_step)
         if not is_pai_training_job() and state.is_world_process_zero:
             jsonl_path = os.path.join(args.output_dir, 'logging.jsonl')
             append_to_jsonl(jsonl_path, logs)
