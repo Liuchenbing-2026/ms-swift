@@ -691,3 +691,34 @@ OmniJev adapter 还需通过环境变量指向四个头制品（位于 adapter �
 | 2   | Clef             | 0.5000     | **0.8333** | +0.3333 | 0.9712          | 0.9311         | ✅ +67%  |
 | 3   | OmniJev          | 0.5500     | 0.7500     | +0.2884 | 0.8465          | 0.8196         | ✅ +37%  |
 | 4   | Generic Decision | 0.1667     | **0.6667** | +0.5000 | 0.5682          | 0.9363         | ✅ +300% |
+
+## StartLux 文本决策示例
+
+[StartLux 插件](https://github.com/modelscope/ms-swift/blob/main/examples/train/decision/startlux.py) 使用已有 `decision` 任务、`ScoringTrainer` 和标准 LoRA 保存接口；不新增训练器。插件按 checkpoint 配置选择 Qwen3.5 dense 或 MoE loader，从最后一个有效位置取 A–Z 的 FP32 候选分数，并保留模型的题型温度。
+
+```bash
+export MODEL_PATH='<STARTLUX_CHECKPOINT>'
+export STARTLUX_SOURCE='<OFFICIAL_STARTLUX_SOURCE>'
+export STARTLUX_TRAIN_FILE='<TRAIN_JSONL>'
+export OUTPUT_DIR='<NEW_OUTPUT_DIRECTORY>'
+bash examples/train/decision/startlux.sh
+```
+
+官方提示词代码固定为 `StartLuxLabs/StartLux-Decision@0e7a2e81b9c92756e26d8edd843a44d50e362669`。本地 JSONL 每行示例：
+
+```json
+{"state":"Paris is the capital of France.","questions":{"q":{"type":"choice","instructions":"What is the capital of France?","criteria":{"Paris":null,"Berlin":null}}},"targets":{"q":{"Paris":1.0,"Berlin":0.0}}}
+```
+
+`targets` 仅参与监督，不进入输入；每个问题单独前向，支持 2–26 个候选、`noul` 和 `score`，不包含图片或宽候选分组。`scoring_head` 仅持有候选索引和温度，不重复保存词表权重。训练后使用独立验证集评估，必要时重新拟合温度；两步冒烟测试不代表精度提升。恢复训练使用标准 `--resume_from_checkpoint` 参数，推理使用相同插件和模型类型加载保存的 adapter。
+
+```bash
+# Keep the same plugin, official prompt source and local evaluation registration.
+export PYTHONPATH="$STARTLUX_SOURCE${PYTHONPATH:+:$PYTHONPATH}"
+export STARTLUX_EVAL_FILE='<HELD_OUT_JSONL>'
+swift infer --external_plugins examples/train/decision/startlux.py \
+  --model "$MODEL_PATH" --model_type startlux_decision --task_type decision \
+  --adapters '<CHECKPOINT_DIRECTORY>' --val_dataset startlux_decision_eval \
+  --metric acc --max_length 1024 --max_batch_size 1 \
+  --result_path '<NEW_PREDICTIONS_JSONL>'
+```

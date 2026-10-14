@@ -618,3 +618,34 @@ When unset, the loader searches `model_dir` (and `adapter_vllm/` subdirectory fo
 | 2 | CMP-02 | Clef | 0.5000 | **0.8333** | +0.3333 | 0.9712 | 0.9311 | ✅ +67% |
 | 3 | CMP-03 | OmniJev | 0.5500 | 0.7500 | +0.2884 | 0.8465 | 0.8196 | ✅ +37% |
 | 4 | CMP-04 | Generic Decision | 0.1667 | **0.6667** | +0.5000 | 0.5682 | 0.9363 | ✅ +300% |
+
+## StartLux text decision example
+
+The [StartLux plugin](https://github.com/modelscope/ms-swift/blob/main/examples/train/decision/startlux.py) uses the existing `decision` task, `ScoringTrainer` and standard LoRA checkpoint lifecycle. It adds no separate trainer. The checkpoint configuration selects the Qwen3.5 dense or MoE loader. The head projects the last valid position onto the A–Z candidates in FP32 and retains per-type checkpoint temperatures.
+
+```bash
+export MODEL_PATH='<STARTLUX_CHECKPOINT>'
+export STARTLUX_SOURCE='<OFFICIAL_STARTLUX_SOURCE>'
+export STARTLUX_TRAIN_FILE='<TRAIN_JSONL>'
+export OUTPUT_DIR='<NEW_OUTPUT_DIRECTORY>'
+bash examples/train/decision/startlux.sh
+```
+
+Pin the official prompt implementation to `StartLuxLabs/StartLux-Decision@0e7a2e81b9c92756e26d8edd843a44d50e362669`. Example local JSONL record:
+
+```json
+{"state":"Paris is the capital of France.","questions":{"q":{"type":"choice","instructions":"What is the capital of France?","criteria":{"Paris":null,"Berlin":null}}},"targets":{"q":{"Paris":1.0,"Berlin":0.0}}}
+```
+
+Targets are supervision only and never enter the prompt. Each question has its own forward pass; 2–26 choices, `noul` and `score` are supported. Images and wide-choice grouping are excluded. The scoring head stores candidate indices and temperatures without duplicating vocabulary weights. Evaluate on a separate held-out split and refit temperatures if needed; a two-step smoke test does not establish a quality gain. Resume with the standard `--resume_from_checkpoint` option; load saved adapters for inference with the same plugin and model type.
+
+```bash
+# Keep the same plugin, official prompt source and local evaluation registration.
+export PYTHONPATH="$STARTLUX_SOURCE${PYTHONPATH:+:$PYTHONPATH}"
+export STARTLUX_EVAL_FILE='<HELD_OUT_JSONL>'
+swift infer --external_plugins examples/train/decision/startlux.py \
+  --model "$MODEL_PATH" --model_type startlux_decision --task_type decision \
+  --adapters '<CHECKPOINT_DIRECTORY>' --val_dataset startlux_decision_eval \
+  --metric acc --max_length 1024 --max_batch_size 1 \
+  --result_path '<NEW_PREDICTIONS_JSONL>'
+```
