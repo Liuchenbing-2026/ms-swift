@@ -24,7 +24,7 @@ class TestSplitList(unittest.TestCase):
         self.assertEqual(split_list(list(range(5)), 3, contiguous=False), [[0, 3], [1, 4], [2]])
 
     def test_contiguous_order(self):
-        self.assertEqual(split_list(list(range(5)), 3), [[0], [1, 2], [3, 4]])
+        self.assertEqual(split_list(list(range(5)), 3), [[0, 1], [2, 3], [4]])
 
     def test_empty_input(self):
         for contiguous in (True, False):
@@ -33,6 +33,18 @@ class TestSplitList(unittest.TestCase):
 
     def test_more_shards_than_items(self):
         self.assertEqual(split_list([1, 2], 4, contiguous=False), [[1], [2], [], []])
+        self.assertEqual(split_list([1, 2], 4), [[1], [2], [], []])
+
+    def test_contiguous_remainder_goes_to_leading_shards(self):
+        self.assertEqual(split_list(list(range(7)), 3), [[0, 1, 2], [3, 4], [5, 6]])
+        self.assertEqual(split_list(list(range(10)), 4), [[0, 1, 2], [3, 4, 5], [6, 7], [8, 9]])
+
+    def test_contiguous_preserves_item_order_and_identity(self):
+        items = [[1], [2, 3], [4, 5, 6], [7]]
+        shards = split_list(items, 3)
+        self.assertEqual([item for shard in shards for item in shard], items)
+        for original, item in zip(items, [item for shard in shards for item in shard]):
+            self.assertIs(item, original)
 
 
 if __name__ == '__main__':
