@@ -43,6 +43,33 @@ class TestMultiturnLengthRewards(unittest.TestCase):
                 with self.subTest(length=length, ids=ids, reward='soft_overlong'):
                     self.assertEqual(self.soft(['answer'], response_token_ids=[ids]), [min(-(length - 6) / 2, 0)])
 
+    def test_rewards_saturate_after_maximum_length(self):
+        for length in [9, 16, 32]:
+            flat = list(range(length))
+            for ids in [flat, [flat], [flat[:4], [], flat[4:]]]:
+                with self.subTest(length=length, ids=ids):
+                    self.assertEqual(self.cosine(['correct'], ['correct'], response_token_ids=[ids]), [0.5])
+                    self.assertEqual(self.cosine(['wrong'], ['correct'], response_token_ids=[ids]), [0.0])
+                    self.assertEqual(self.soft(['answer'], response_token_ids=[ids]), [-1.0])
+
+    def test_overlong_rollout_to_grpo_reward_dispatch(self):
+        response = ChatCompletionResponse(
+            model='test',
+            choices=[ChatCompletionResponseChoice(0, ChatMessage('assistant', 'correct'), 'stop')],
+            usage=UsageInfo(1, 16, 17))
+        output = RolloutOutput(
+            response=response,
+            messages=[{
+                'role': 'assistant',
+                'content': 'correct'
+            }],
+            response_token_ids=[list(range(8)), list(range(8))])
+        sample = GRPOSample(messages=[], extra={'solution': 'correct'})
+        sample.apply_rollout_output(rollout_output=output)
+        rewards = score_completions([sample], [self.cosine, self.soft], None, False, torch.device('cpu'))
+        torch.testing.assert_close(rewards, torch.tensor([[0.5, -1.0]]), rtol=0, atol=0)
+        self.assertEqual(sample.response_token_ids, output.response_token_ids)
+
     def test_rollout_output_to_grpo_reward_dispatch(self):
         for token_ids in [list(range(7)), [list(range(3)), list(range(3, 7))]]:
             with self.subTest(token_ids=token_ids):

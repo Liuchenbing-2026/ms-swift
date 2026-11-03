@@ -121,7 +121,7 @@ A conversation between User and Assistant. The user asks a question, and the Ass
 - cosine_max_len_value_wrong（默认值：0.0）：生成错误答案时，最大长度对应的奖励值。
 - cosine_min_len_value_correct（默认值：1.0）：生成正确答案时，最小长度对应的奖励值。
 - cosine_max_len_value_correct（默认值：0.5）：生成正确答案时，最大长度对应的奖励值。
-- cosine_max_len（默认值等于模型生成的最大程度）：生成文本的最大长度限制。
+- cosine_max_len（默认值等于模型生成的最大程度）：生成文本的最大长度限制。 超过该长度时，奖励固定为上限处的值；多轮生成按所有轮次的 token 总数计算。
 
 
 ### 4. **repetition**
@@ -138,7 +138,7 @@ A conversation between User and Assistant. The user asks a question, and the Ass
 定义长度惩罚区间。在这个区间内，给予[-1,0]的线性惩罚。
 
 参数
-- soft_max_length: 论文中的L_max，模型的最大生成长度，默认等于max_completion_length
+- soft_max_length: 论文中的L_max，模型的最大生成长度，默认等于max_completion_length。超过该长度时，惩罚固定为 -1。
 - soft_cache_length: 论文中的L_cache，控制长度惩罚区间，区间为[soft_max_length-soft_cache_length, soft_max_length]
 
 ## 注意事项

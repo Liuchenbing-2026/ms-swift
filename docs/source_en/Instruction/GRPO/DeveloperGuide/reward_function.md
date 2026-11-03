@@ -120,7 +120,7 @@ Parameters:
 - cosine_max_len_value_wrong (default: 0.0): The reward value for the maximum length when the answer is incorrect.
 - cosine_min_len_value_correct (default: 1.0): The reward value for the minimum length when the answer is correct.
 - cosine_max_len_value_correct (default: 0.5): The reward value for the maximum length when the answer is correct.
-- cosine_max_len (default equals the model's maximum generation length): The maximum length limit for the generated text.
+- cosine_max_len (default equals the model's maximum generation length): The maximum length limit for the generated text. Longer completions use the reward at this limit, including token counts accumulated across multiple turns.
 
 ### 4. **repetition**
 
@@ -136,7 +136,7 @@ Parameters:
 Defines a length penalty interval. Within this interval, a linear penalty in the range [-1, 0] is applied.
 
 Parameters:
-- soft_max_length: L_max in the paper, the model's maximum generation length, defaulting to max_completion_length.
+- soft_max_length: L_max in the paper, the model's maximum generation length, defaulting to max_completion_length. Completions beyond this length receive the full penalty of -1.
 - soft_cache_length: L_cache in the paper, controlling the length penalty interval, which is [soft_max_length - soft_cache_length, soft_max_length].
 
 ## Notes
