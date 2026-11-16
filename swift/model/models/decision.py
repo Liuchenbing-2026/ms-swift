@@ -106,6 +106,10 @@ class JevModelLoader(ScoringModelLoader, Qwen3_5Loader):
 
     def get_model(self, model_dir: str, config: PretrainedConfig, processor: Processor,
                   model_kwargs) -> PreTrainedModel:
+        if str(getattr(config, 'model_type', '')).lower() == 'qwen3_5_moe':
+            from .qwen import Qwen3_5MoeLoader
+            model = Qwen3_5MoeLoader.get_model(self, model_dir, config, processor, model_kwargs)
+            return self._attach_head(model, model_dir, config)
         if str(getattr(config, 'model_type', '')).lower() == 'qwen3_5_text':
             from transformers import Qwen3_5ForCausalLM, Qwen3_5PreTrainedModel
 
